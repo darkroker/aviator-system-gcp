@@ -1,0 +1,458 @@
+# Docker Compose para Google Cloud Platform
+# Sistema Aviator V19.3 - Configuración de producción
+# Optimizado para Cloud Run, Compute Engine y Kubernetes
+
+version: '3.8'
+
+services:
+  # ============================================================================
+  # Servicio Principal - Aplicación Aviator
+  # ============================================================================
+  aviator-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.gcp
+      target: runtime
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: gcr.io/${GOOGLE_CLOUD_PROJECT}/aviator-system:${VERSION:-latest}
+    container_name: aviator-app
+    restart: unless-stopped
+    
+    # Configuración de recursos
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+    
+    # Variables de entorno
+    environment:
+      # GCP Configuration
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account.json
+      - CLOUD_SQL_CONNECTION_NAME=${CLOUD_SQL_CONNECTION_NAME}
+      
+      # Application Configuration
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+      - PYTHONPATH=/app
+      
+      # Database Configuration
+      - DB_HOST=${DB_HOST:-127.0.0.1}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-aviator_db}
+      - DB_USER=${DB_USER:-aviator_user}
+      - DB_PASSWORD_SECRET=${DB_PASSWORD_SECRET:-aviator-db-password}
+      
+      # Redis Configuration
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD_SECRET=${REDIS_PASSWORD_SECRET:-aviator-redis-password}
+      
+      # Trading Configuration
+      - TRADING_MODE=${TRADING_MODE:-live}
+      - MAX_BET_AMOUNT=${MAX_BET_AMOUNT:-1000}
+      - RISK_LEVEL=${RISK_LEVEL:-medium}
+      
+      # Monitoring Configuration
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
+      - METRICS_PORT=9090
+      
+      # Security Configuration
+      - JWT_SECRET_KEY_SECRET=${JWT_SECRET_KEY_SECRET:-aviator-jwt-secret}
+      - ENCRYPTION_KEY_SECRET=${ENCRYPTION_KEY_SECRET:-aviator-encryption-key}
+      
+      # Gunicorn Configuration
+      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-4}
+      - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-120}
+      - GUNICORN_KEEPALIVE=${GUNICORN_KEEPALIVE:-5}
+    
+    # Puertos expuestos
+    ports:
+      - "8000:8000"  # API Principal
+      - "8080:8080"  # Dashboard
+      - "8501:8501"  # Streamlit (si se usa)
+      - "9090:9090"  # Métricas Prometheus
+    
+    # Volúmenes para persistencia
+    volumes:
+      - aviator-data:/app/data
+      - aviator-logs:/var/log/aviator
+      - aviator-models:/app/models
+      - ./gcp/credentials:/app/credentials:ro
+      - ./gcp/configs:/app/config/gcp:ro
+    
+    # Configuración de red
+    networks:
+      - aviator-network
+    
+    # Dependencias
+    depends_on:
+      redis:
+        condition: service_healthy
+    
+    # Health check
+    healthcheck:
+      test: ["/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+    
+    # Configuración de logging
+    logging:
+      driver: "gcplogs"
+      options:
+        gcp-project: "${GOOGLE_CLOUD_PROJECT}"
+        gcp-log-cmd: "true"
+        labels: "service=aviator-app,environment=${ENVIRONMENT:-production}"
+
+  # ============================================================================
+  # Redis - Cache y Session Store
+  # ============================================================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: aviator-redis
+    restart: unless-stopped
+    
+    # Configuración de recursos
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    
+    # Configuración de Redis
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 300
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    
+    # Variables de entorno
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    
+    # Puerto expuesto
+    ports:
+      - "6379:6379"
+    
+    # Volúmenes para persistencia
+    volumes:
+      - redis-data:/data
+      - ./gcp/configs/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    
+    # Configuración de red
+    networks:
+      - aviator-network
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    
+    # Configuración de logging
+    logging:
+      driver: "gcplogs"
+      options:
+        gcp-project: "${GOOGLE_CLOUD_PROJECT}"
+        labels: "service=redis,environment=${ENVIRONMENT:-production}"
+
+  # ============================================================================
+  # Nginx - Reverse Proxy y Load Balancer
+  # ============================================================================
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: aviator-nginx
+    restart: unless-stopped
+    
+    # Configuración de recursos
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    
+    # Puertos expuestos
+    ports:
+      - "80:80"
+      - "443:443"
+    
+    # Volúmenes para configuración
+    volumes:
+      - ./gcp/configs/nginx:/etc/nginx/conf.d:ro
+      - ./gcp/ssl:/etc/nginx/ssl:ro
+      - aviator-logs:/var/log/nginx
+    
+    # Configuración de red
+    networks:
+      - aviator-network
+    
+    # Dependencias
+    depends_on:
+      aviator-app:
+        condition: service_healthy
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Configuración de logging
+    logging:
+      driver: "gcplogs"
+      options:
+        gcp-project: "${GOOGLE_CLOUD_PROJECT}"
+        labels: "service=nginx,environment=${ENVIRONMENT:-production}"
+
+  # ============================================================================
+  # Prometheus - Monitoreo de Métricas
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: aviator-prometheus
+    restart: unless-stopped
+    
+    # Configuración de recursos
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.2'
+          memory: 512M
+    
+    # Configuración de Prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=10GB'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    
+    # Puerto expuesto
+    ports:
+      - "9091:9090"
+    
+    # Volúmenes para configuración y datos
+    volumes:
+      - ./gcp/configs/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    
+    # Configuración de red
+    networks:
+      - aviator-network
+    
+    # Dependencias
+    depends_on:
+      aviator-app:
+        condition: service_healthy
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Configuración de logging
+    logging:
+      driver: "gcplogs"
+      options:
+        gcp-project: "${GOOGLE_CLOUD_PROJECT}"
+        labels: "service=prometheus,environment=${ENVIRONMENT:-production}"
+
+  # ============================================================================
+  # Grafana - Dashboard de Monitoreo
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: aviator-grafana
+    restart: unless-stopped
+    
+    # Configuración de recursos
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    
+    # Variables de entorno
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_SERVER_ROOT_URL=https://${DOMAIN:-localhost}/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    
+    # Puerto expuesto
+    ports:
+      - "3000:3000"
+    
+    # Volúmenes para configuración y datos
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./gcp/configs/grafana:/etc/grafana/provisioning:ro
+    
+    # Configuración de red
+    networks:
+      - aviator-network
+    
+    # Dependencias
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    
+    # Health check
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Configuración de logging
+    logging:
+      driver: "gcplogs"
+      options:
+        gcp-project: "${GOOGLE_CLOUD_PROJECT}"
+        labels: "service=grafana,environment=${ENVIRONMENT:-production}"
+
+# ============================================================================
+# Volúmenes Persistentes
+# ============================================================================
+volumes:
+  aviator-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aviator/data
+  
+  aviator-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aviator/logs
+  
+  aviator-models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aviator/models
+  
+  redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aviator/redis
+  
+  prometheus-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aviator/prometheus
+  
+  grafana-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aviator/grafana
+
+# ============================================================================
+# Configuración de Red
+# ============================================================================
+networks:
+  aviator-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: aviator-br0
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.driver.mtu: 1500
+
+# ============================================================================
+# Configuración de Secretos (para Docker Swarm)
+# ============================================================================
+secrets:
+  db-password:
+    external: true
+    name: aviator-db-password
+  
+  redis-password:
+    external: true
+    name: aviator-redis-password
+  
+  jwt-secret:
+    external: true
+    name: aviator-jwt-secret
+  
+  encryption-key:
+    external: true
+    name: aviator-encryption-key
+  
+  service-account:
+    external: true
+    name: aviator-service-account
+
+# ============================================================================
+# Configuración de Configs (para Docker Swarm)
+# ============================================================================
+configs:
+  nginx-config:
+    external: true
+    name: aviator-nginx-config
+  
+  prometheus-config:
+    external: true
+    name: aviator-prometheus-config
+  
+  grafana-config:
+    external: true
+    name: aviator-grafana-config
