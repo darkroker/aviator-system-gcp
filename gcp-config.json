@@ -1,0 +1,368 @@
+{
+  "project_id": "",
+  "environment": "development",
+  "region": "us-central1",
+  "zone": "us-central1-a",
+  "billing_account_id": "",
+  "service_account": {
+    "name": "aviator-deployment-sa",
+    "display_name": "Aviator Trading System Deployment Service Account",
+    "description": "Service account for deploying and managing Aviator Trading System",
+    "key_file": "aviator-deployment-sa-key.json"
+  },
+  "apis": [
+    "compute.googleapis.com",
+    "sql-component.googleapis.com",
+    "sqladmin.googleapis.com",
+    "storage-component.googleapis.com",
+    "storage.googleapis.com",
+    "redis.googleapis.com",
+    "secretmanager.googleapis.com",
+    "monitoring.googleapis.com",
+    "logging.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "run.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "container.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "cloudkms.googleapis.com",
+    "pubsub.googleapis.com",
+    "cloudscheduler.googleapis.com",
+    "cloudfunctions.googleapis.com"
+  ],
+  "environments": {
+    "development": {
+      "machine_type": "e2-medium",
+      "disk_size": "20GB",
+      "disk_type": "pd-standard",
+      "db_tier": "db-f1-micro",
+      "redis_memory": "1GB",
+      "redis_tier": "BASIC",
+      "budget_limit": 100,
+      "auto_scaling": {
+        "min_instances": 1,
+        "max_instances": 3
+      },
+      "network": {
+        "vpc_name": "aviator-vpc-dev",
+        "subnet_name": "aviator-subnet-dev",
+        "firewall_rules": [
+          "aviator-allow-http-dev",
+          "aviator-allow-https-dev",
+          "aviator-allow-ssh-dev"
+        ]
+      }
+    },
+    "staging": {
+      "machine_type": "e2-standard-2",
+      "disk_size": "50GB",
+      "disk_type": "pd-ssd",
+      "db_tier": "db-n1-standard-1",
+      "redis_memory": "2GB",
+      "redis_tier": "STANDARD_HA",
+      "budget_limit": 300,
+      "auto_scaling": {
+        "min_instances": 1,
+        "max_instances": 5
+      },
+      "network": {
+        "vpc_name": "aviator-vpc-staging",
+        "subnet_name": "aviator-subnet-staging",
+        "firewall_rules": [
+          "aviator-allow-http-staging",
+          "aviator-allow-https-staging",
+          "aviator-allow-ssh-staging"
+        ]
+      }
+    },
+    "production": {
+      "machine_type": "e2-standard-4",
+      "disk_size": "100GB",
+      "disk_type": "pd-ssd",
+      "db_tier": "db-n1-standard-2",
+      "redis_memory": "4GB",
+      "redis_tier": "STANDARD_HA",
+      "budget_limit": 1000,
+      "auto_scaling": {
+        "min_instances": 2,
+        "max_instances": 10
+      },
+      "network": {
+        "vpc_name": "aviator-vpc-prod",
+        "subnet_name": "aviator-subnet-prod",
+        "firewall_rules": [
+          "aviator-allow-http-prod",
+          "aviator-allow-https-prod",
+          "aviator-allow-ssh-prod"
+        ]
+      }
+    }
+  },
+  "database": {
+    "name": "aviator-db",
+    "version": "POSTGRES_14",
+    "backup_config": {
+      "enabled": true,
+      "start_time": "03:00",
+      "location": "us",
+      "point_in_time_recovery_enabled": true,
+      "transaction_log_retention_days": 7,
+      "backup_retention_settings": {
+        "retained_backups": 30,
+        "retention_unit": "COUNT"
+      }
+    },
+    "maintenance_window": {
+      "day": 7,
+      "hour": 4,
+      "update_track": "stable"
+    },
+    "flags": {
+      "max_connections": "200",
+      "shared_preload_libraries": "pg_stat_statements",
+      "log_statement": "all",
+      "log_min_duration_statement": "1000"
+    }
+  },
+  "redis": {
+    "name": "aviator-redis",
+    "version": "REDIS_6_X",
+    "auth_enabled": true,
+    "transit_encryption_mode": "SERVER_AUTHENTICATION",
+    "maintenance_policy": {
+      "weekly_maintenance_window": {
+        "day": "SUNDAY",
+        "start_time": {
+          "hours": 4,
+          "minutes": 0
+        }
+      }
+    }
+  },
+  "storage": {
+    "buckets": {
+      "app_data": {
+        "name": "aviator-app-data",
+        "location": "US",
+        "storage_class": "STANDARD",
+        "versioning": true,
+        "lifecycle_rules": [
+          {
+            "action": "SetStorageClass",
+            "storage_class": "NEARLINE",
+            "age": 30
+          },
+          {
+            "action": "SetStorageClass",
+            "storage_class": "COLDLINE",
+            "age": 90
+          },
+          {
+            "action": "Delete",
+            "age": 365
+          }
+        ]
+      },
+      "backups": {
+        "name": "aviator-backups",
+        "location": "US",
+        "storage_class": "COLDLINE",
+        "versioning": true,
+        "lifecycle_rules": [
+          {
+            "action": "Delete",
+            "age": 2555
+          }
+        ]
+      },
+      "logs": {
+        "name": "aviator-logs",
+        "location": "US",
+        "storage_class": "STANDARD",
+        "versioning": false,
+        "lifecycle_rules": [
+          {
+            "action": "SetStorageClass",
+            "storage_class": "NEARLINE",
+            "age": 7
+          },
+          {
+            "action": "Delete",
+            "age": 90
+          }
+        ]
+      }
+    }
+  },
+  "monitoring": {
+    "interval": 300,
+    "alert_threshold": "medium",
+    "slack_webhook": "",
+    "email_to": "",
+    "metrics": {
+      "cpu_threshold": 80,
+      "memory_threshold": 85,
+      "disk_threshold": 90,
+      "response_time_threshold": 5000,
+      "error_rate_threshold": 5
+    },
+    "alerts": {
+      "high_cpu": {
+        "enabled": true,
+        "threshold": 80,
+        "duration": "5m"
+      },
+      "high_memory": {
+        "enabled": true,
+        "threshold": 85,
+        "duration": "5m"
+      },
+      "disk_space": {
+        "enabled": true,
+        "threshold": 90,
+        "duration": "2m"
+      },
+      "database_connections": {
+        "enabled": true,
+        "threshold": 180,
+        "duration": "3m"
+      },
+      "response_time": {
+        "enabled": true,
+        "threshold": 5000,
+        "duration": "10m"
+      },
+      "error_rate": {
+        "enabled": true,
+        "threshold": 5,
+        "duration": "5m"
+      }
+    }
+  },
+  "security": {
+    "ssl_certificates": {
+      "enabled": true,
+      "auto_renewal": true,
+      "domains": []
+    },
+    "firewall": {
+      "default_deny_all": true,
+      "allowed_sources": {
+        "ssh": ["0.0.0.0/0"],
+        "http": ["0.0.0.0/0"],
+        "https": ["0.0.0.0/0"]
+      }
+    },
+    "secrets": {
+      "database_password": "aviator-db-password",
+      "redis_auth_string": "aviator-redis-auth",
+      "jwt_secret": "aviator-jwt-secret",
+      "api_keys": "aviator-api-keys",
+      "encryption_key": "aviator-encryption-key"
+    }
+  },
+  "scripts": {
+    "setup": "setup-gcp-steps.ps1",
+    "deploy": "deploy-gcp.ps1",
+    "monitor": "monitor-gcp.ps1",
+    "diagnose": "diagnose-issues.ps1",
+    "cleanup": "cleanup-gcp.ps1",
+    "verify": "verify-gcp-setup.ps1"
+  },
+  "deployment": {
+    "strategy": "rolling",
+    "health_check": {
+      "enabled": true,
+      "path": "/health",
+      "port": 3000,
+      "timeout": 30,
+      "interval": 60
+    },
+    "rollback": {
+      "enabled": true,
+      "auto_rollback_on_failure": true,
+      "max_failed_deployments": 3
+    }
+  },
+  "backup": {
+    "enabled": true,
+    "schedule": "0 2 * * *",
+    "retention_days": 30,
+    "compression": true,
+    "encryption": true,
+    "destinations": [
+      "cloud_storage",
+      "local"
+    ]
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json",
+    "retention_days": 30,
+    "destinations": [
+      "cloud_logging",
+      "local_file"
+    ],
+    "structured_logging": true,
+    "log_sampling": {
+      "enabled": true,
+      "rate": 0.1
+    }
+  },
+  "performance": {
+    "caching": {
+      "enabled": true,
+      "ttl": 3600,
+      "max_size": "100MB"
+    },
+    "compression": {
+      "enabled": true,
+      "level": 6
+    },
+    "connection_pooling": {
+      "enabled": true,
+      "max_connections": 20,
+      "idle_timeout": 300
+    }
+  },
+  "features": {
+    "auto_scaling": true,
+    "load_balancing": true,
+    "cdn": false,
+    "ssl_termination": true,
+    "rate_limiting": true,
+    "ddos_protection": true,
+    "geo_redundancy": false
+  },
+  "maintenance": {
+    "window": {
+      "day": "sunday",
+      "start_hour": 2,
+      "duration_hours": 4
+    },
+    "auto_updates": {
+      "enabled": true,
+      "security_only": false,
+      "reboot_if_required": true
+    }
+  },
+  "cost_optimization": {
+    "preemptible_instances": {
+      "enabled": false,
+      "percentage": 50
+    },
+    "committed_use_discounts": {
+      "enabled": false,
+      "term": "1_year"
+    },
+    "sustained_use_discounts": {
+      "enabled": true
+    },
+    "rightsizing": {
+      "enabled": true,
+      "recommendations": true
+    }
+  }
+}
